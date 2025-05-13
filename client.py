@@ -5,17 +5,21 @@ from contextlib import AsyncExitStack
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-from anthropic import Anthropic
+from google import genai  
 from dotenv import load_dotenv
+import os  
 
-load_dotenv()  # load environment variables from .env
+load_dotenv() 
 
 class MCPClient:
     def __init__(self):
         # Initialize session and client objects
         self.session: Optional[ClientSession] = None
         self.exit_stack = AsyncExitStack()
-        self.anthropic = Anthropic()
+        api_key = os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            raise ValueError("GEMINI_API_KEY is not set in the .env file")
+        self.genai_client = genai.Client(api_key=api_key) 
 
     async def connect_to_server(self, server_script_path: str):
         """Connect to an MCP server
@@ -47,7 +51,7 @@ class MCPClient:
         print("\nConnected to server with tools:", [tool.name for tool in tools])
 
     async def process_query(self, query: str) -> str:
-        """Process a query using Claude and available tools"""
+        """Process a query using Google's Generative AI and available tools"""
         messages = [
             {
                 "role": "user",
@@ -62,57 +66,16 @@ class MCPClient:
             "input_schema": tool.inputSchema
         } for tool in response.tools]
 
-        # Initial Claude API call
-        response = self.anthropic.messages.create(
-            model="claude-3-5-sonnet-20241022",
-            max_tokens=1000,
-            messages=messages,
-            tools=available_tools
+        # Initial Google GenAI API call
+        genai_response = self.genai_client.models.generate_content(
+            model="gemini-2.0-flash",  
+            contents=query
         )
 
-        # Process response and handle tool calls
-        final_text = []
+        # Process response
+        final_text = genai_response.text  
 
-        assistant_message_content = []
-        for content in response.content:
-            if content.type == 'text':
-                final_text.append(content.text)
-                assistant_message_content.append(content)
-            elif content.type == 'tool_use':
-                tool_name = content.name
-                tool_args = content.input
-
-                # Execute tool call
-                result = await self.session.call_tool(tool_name, tool_args)
-                final_text.append(f"[Calling tool {tool_name} with args {tool_args}]")
-
-                assistant_message_content.append(content)
-                messages.append({
-                    "role": "assistant",
-                    "content": assistant_message_content
-                })
-                messages.append({
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": content.id,
-                            "content": result.content
-                        }
-                    ]
-                })
-
-                # Get next response from Claude
-                response = self.anthropic.messages.create(
-                    model="claude-3-5-sonnet-20241022",
-                    max_tokens=1000,
-                    messages=messages,
-                    tools=available_tools
-                )
-
-                final_text.append(response.content[0].text)
-
-        return "\n".join(final_text)
+        return final_text
 
     async def chat_loop(self):
         """Run an interactive chat loop"""
@@ -151,5 +114,3 @@ async def main():
 if __name__ == "__main__":
     import sys
     asyncio.run(main())
-
-
